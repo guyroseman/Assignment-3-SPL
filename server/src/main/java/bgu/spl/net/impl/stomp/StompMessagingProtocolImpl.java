@@ -1,16 +1,19 @@
 package bgu.spl.net.impl.stomp;
 
+import bgu.spl.net.api.StompMessagingProtocol;
+import bgu.spl.net.impl.data.Database;
+import bgu.spl.net.impl.data.LoginStatus;
+import bgu.spl.net.srv.Connections;
+
 import java.util.HashMap;
 import java.util.Map;
-
-import bgu.spl.net.api.StompMessagingProtocol;
-import bgu.spl.net.srv.Connections;
 
 public class StompMessagingProtocolImpl implements StompMessagingProtocol<String> {
 
     private int connectionId;
     private Connections<String> connections;
     private boolean shouldTerminate = false;
+    private String currentUser = null; 
 
     @Override
     public void start(int connectionId, Connections<String> connections) {
@@ -20,31 +23,32 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
 
     @Override
     public void process(String message) {
-        // Simple parsing of the message to extract the command
-        // Note: In a full implementation, you should parse headers and body properly
         String[] lines = message.split("\n");
-        String command = lines[0].trim();
+        if (lines.length == 0) return;
 
-        // Use switch-case to handle different STOMP commands
+        String command = lines[0].trim();
+        Map<String, String> headers = parseHeaders(message);
+        String body = extractBody(message);
+
+        // Delegate execution based on the STOMP command
         switch (command) {
             case "CONNECT":
-                handleConnect(message);
-                break;
-            case "SEND":
-                handleSend(message);
+                handleConnect(headers);
                 break;
             case "SUBSCRIBE":
-                handleSubscribe(message);
+                handleSubscribe(headers);
                 break;
             case "UNSUBSCRIBE":
-                handleUnsubscribe(message);
+                handleUnsubscribe(headers);
+                break;
+            case "SEND":
+                handleSend(headers, body);
                 break;
             case "DISCONNECT":
-                handleDisconnect(message);
+                handleDisconnect(headers);
                 break;
             default:
-                // Handle unknown command or error
-                System.out.println("Unknown command: " + command);
+                sendError(headers, "Unknown Command", "The command " + command + " is not recognized.");
                 break;
         }
     }
@@ -54,90 +58,158 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
         return shouldTerminate;
     }
 
-    // --- Helper methods for handling specific commands ---
+    // --- Command Handler Methods ---
 
-    private void handleConnect(String message) {
-        System.out.println("Received CONNECT frame");
-        // TODO:
-        // 1. Extract 'login' and 'passcode' headers
-        // 2. Check if user exists / password is correct
-        // 3. If successful, send CONNECTED frame
-        // 4. If failed, send ERROR frame and close connection
-        Map<String, String> headers = parseHeaders(message);
-
+    private void handleConnect(Map<String, String> headers) {
         String login = headers.get("login");
         String passcode = headers.get("passcode");
         String acceptVersion = headers.get("accept-version");
-        String host = headers.get("host");
 
+        // Validate mandatory headers
+        if (acceptVersion == null || !acceptVersion.equals("1.2")) {
+            sendError(headers, "Malformed Frame", "Supported version is 1.2");
+            return;
+        }
+        if (login == null || passcode == null) {
+            sendError(headers, "Malformed Frame", "Missing login or passcode header");
+            return;
+        }
+
+        // Authenticate user against the database
+        LoginStatus status = Database.getInstance().login(connectionId, login, passcode);
+
+        if (status == LoginStatus.LOGGED_IN_SUCCESSFULLY || status == LoginStatus.ADDED_NEW_USER) {
+            this.currentUser = login;
+            
+            // Send success frame
+            String response = "CONNECTED\n" +
+                              "version:1.2\n" +
+                              "\n" +
+                              "\u0000";
+            connections.send(connectionId, response);
+        } else {
+            // Handle various login failures
+            String errorMsg = "Login failed";
+            if (status == LoginStatus.WRONG_PASSWORD) errorMsg = "Wrong password";
+            else if (status == LoginStatus.ALREADY_LOGGED_IN) errorMsg = "User already logged in";
+            else if (status == LoginStatus.CLIENT_ALREADY_CONNECTED) errorMsg = "Client already connected";
+            
+            sendError(headers, "Login Failed", errorMsg);
+        }
     }
 
-    private void handleSubscribe(String message) {
-        System.out.println("Received SUBSCRIBE frame");
-        // TODO:
-        // 1. Extract 'destination' and 'id' headers
-        // 2. Add client to the topic in 'connections'
-        // 3. Send RECEIPT frame if requested
+    private void handleSubscribe(Map<String, String> headers) {
+        String destination = headers.get("destination");
+        String id = headers.get("id");
+
+        if (destination == null || id == null) {
+            sendError(headers, "Malformed Frame", "Missing destination or id header");
+            return;
+        }
+
+        // Register the subscription
+        connections.subscribe(destination, connectionId, id);
+
+        sendReceiptIfNeeded(headers);
     }
 
-    private void handleUnsubscribe(String message) {
-        System.out.println("Received UNSUBSCRIBE frame");
-        // TODO:
-        // 1. Extract 'id' header
-        // 2. Remove client from the topic
-        // 3. Send RECEIPT frame if requested
+    private void handleUnsubscribe(Map<String, String> headers) {
+        String id = headers.get("id");
+        if (id == null) {
+             sendError(headers, "Malformed Frame", "Missing id header");
+             return;
+        }
+
+        // Unsubscribe using the ID directly.
+        // ConnectionsImpl will look up the corresponding channel and remove the user.
+        connections.unsubscribe(id, connectionId);
+        
+        sendReceiptIfNeeded(headers);
     }
 
-    private void handleSend(String message) {
-        System.out.println("Received SEND frame");
-        // TODO:
-        // 1. Extract 'destination' header
-        // 2. Send the message body to all subscribers of that destination
-        //    (Using connections.send(channel, msg))
+    private void handleSend(Map<String, String> headers, String body) {
+        String destination = headers.get("destination");
+        if (destination == null) {
+            sendError(headers, "Malformed Frame", "Missing destination header");
+            return;
+        }
+        
+        // Ensure the user is logged in before allowing them to send messages
+        if (this.currentUser == null) {
+            sendError(headers, "Unauthorized", "You must log in first");
+            return;
+        }
+
+        // Construct the MESSAGE frame for broadcasting
+        String messageFrame = "MESSAGE\n" +
+                              "subscription:0\n" + // Placeholder: In a strict implementation, this would be dynamic
+                              "message-id:" + System.currentTimeMillis() + "\n" +
+                              "destination:" + destination + "\n" +
+                              "\n" +
+                              body + "\n" + 
+                              "\u0000";
+
+        // Broadcast to all subscribers of the channel
+        connections.send(destination, messageFrame);
+        sendReceiptIfNeeded(headers);
     }
 
-    private void handleDisconnect(String message) {
-        System.out.println("Received DISCONNECT frame");
-        // TODO:
-        // 1. Send RECEIPT frame
-        // 2. Set shouldTerminate = true
-        // 3. Close the connection via connections.disconnect(connectionId)
+    private void handleDisconnect(Map<String, String> headers) {
+        // Mark user as logged out in the database
+        Database.getInstance().logout(connectionId);
+        
+        sendReceiptIfNeeded(headers);
+        
+        // Signal termination and close connection.
+        // ConnectionsImpl will automatically clean up all subscriptions for this ID.
+        shouldTerminate = true;
+        connections.disconnect(connectionId);
     }
 
-    // --- Helper function to parse headers ---
+    // --- Helper Methods ---
+
+    private void sendReceiptIfNeeded(Map<String, String> headers) {
+        String receiptId = headers.get("receipt");
+        if (receiptId != null) {
+            String receiptFrame = "RECEIPT\n" +
+                                  "receipt-id:" + receiptId + "\n" +
+                                  "\n" +
+                                  "\u0000";
+            connections.send(connectionId, receiptFrame);
+        }
+    }
+
+    private void sendError(Map<String, String> headers, String message, String description) {
+        String errorFrame = "ERROR\n" +
+                            "message:" + message + "\n" +
+                            (headers.containsKey("receipt") ? "receipt-id:" + headers.get("receipt") + "\n" : "") +
+                            "\n" +
+                            description + "\n" +
+                            "\u0000";
+        connections.send(connectionId, errorFrame);
+        
+        // Protocol requires closing connection after an ERROR frame
+        shouldTerminate = true;
+        connections.disconnect(connectionId);
+    }
+
     private Map<String, String> parseHeaders(String message) {
         Map<String, String> headers = new HashMap<>();
         String[] lines = message.split("\n");
-        
-        // Start from line 1 (because line 0 is the command itself, e.g., CONNECT)
         for (int i = 1; i < lines.length; i++) {
             String line = lines[i].trim();
-            if (line.isEmpty()) break; // Reached end of headers (empty line)
-            
-            String[] parts = line.split(":", 2); // Split by the first colon only
+            if (line.isEmpty()) break;
+            String[] parts = line.split(":", 2);
             if (parts.length == 2) {
                 headers.put(parts[0], parts[1]);
             }
         }
         return headers;
     }
-    
-    // --- Helper function for sending errors and closing connection ---
-    private void sendError(Map<String, String> headers, String messageHeader, String descriptionBody) {
-        String receiptId = headers.get("receipt"); // If client requested a receipt, return it in the error too
-        
-        StringBuilder errorFrame = new StringBuilder();
-        errorFrame.append("ERROR\n");
-        if (receiptId != null) {
-            errorFrame.append("receipt-id:").append(receiptId).append("\n");
-        }
-        errorFrame.append("message:").append(messageHeader).append("\n");
-        errorFrame.append("\n"); // End of headers
-        errorFrame.append(descriptionBody).append("\n"); // Body of the message
-        errorFrame.append("\u0000");
 
-        connections.send(connectionId, errorFrame.toString());
-        connections.disconnect(connectionId); // Error in CONNECT requires closing the connection
-        shouldTerminate = true; // Signal protocol to terminate
+    private String extractBody(String message) {
+        int splitIndex = message.indexOf("\n\n");
+        if (splitIndex == -1) return "";
+        return message.substring(splitIndex + 2);
     }
 }

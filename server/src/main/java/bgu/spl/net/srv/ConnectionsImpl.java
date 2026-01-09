@@ -1,21 +1,26 @@
 package bgu.spl.net.srv;
 
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class ConnectionsImpl<T> implements Connections<T> {
 
-    // Mapping between connection ID and its Handler (to send messages via TCP)
+    // 1. Mapping: ConnectionID -> ConnectionHandler
+    // Holds the physical connection handlers for sending data over the network.
     private final ConcurrentHashMap<Integer, ConnectionHandler<T>> activeConnections = new ConcurrentHashMap<>();
 
-    // Mapping between channel name (Topic) and a list of subscribed connection IDs
-    private final ConcurrentHashMap<String, ConcurrentLinkedQueue<Integer>> channels = new ConcurrentHashMap<>();
+    // 2. Mapping: ChannelName -> ( ConnectionID -> SubscriptionID )
+    // Manages topic subscriptions. Used when sending a message to a channel to know who should receive it.
+    private final ConcurrentHashMap<String, ConcurrentHashMap<Integer, String>> channelSubscribers = new ConcurrentHashMap<>();
+
+    // 3. Mapping: ConnectionID -> ( SubscriptionID -> ChannelName )
+    // Reverse mapping for fast lookup. Used to efficiently unsubscribe a user by ID or clean up on disconnect.
+    private final ConcurrentHashMap<Integer, ConcurrentHashMap<String, String>> clientSubscriptions = new ConcurrentHashMap<>();
 
     @Override
     public boolean send(int connectionId, T msg) {
         ConnectionHandler<T> handler = activeConnections.get(connectionId);
         if (handler != null) {
-            // Sending the message via the handler (thread-safe due to the handler's implementation)
             handler.send(msg);
             return true;
         }
@@ -24,11 +29,13 @@ public class ConnectionsImpl<T> implements Connections<T> {
 
     @Override
     public void send(String channel, T msg) {
-        // Sending a message to all clients subscribed to the specific channel
-        ConcurrentLinkedQueue<Integer> subscribers = channels.get(channel);
+        // Retrieve all subscribers for the given channel
+        ConcurrentHashMap<Integer, String> subscribers = channelSubscribers.get(channel);
+        
         if (subscribers != null) {
-            for (Integer connectionId : subscribers) {
-                // We use the existing send function to handle the actual sending
+            for (Integer connectionId : subscribers.keySet()) {
+                // In a future improvement, we could use the subscription-id (value) 
+                // to customize the message header for each client.
                 send(connectionId, msg);
             }
         }
@@ -36,47 +43,55 @@ public class ConnectionsImpl<T> implements Connections<T> {
 
     @Override
     public void disconnect(int connectionId) {
-        // Removing the client from the active connections map
+        // Remove the physical connection
         activeConnections.remove(connectionId);
-        
-        // Note: We do not necessarily remove the client from all topics here immediately.
-        // Usually, the protocol handles cleanup or the 'send' method will just fail 
-        // gracefully if the ID is in a topic but not in activeConnections.
+
+        // Remove all logical subscriptions associated with this user
+        Map<String, String> userSubs = clientSubscriptions.remove(connectionId);
+        if (userSubs != null) {
+            for (String channel : userSubs.values()) {
+                // Clean up the user from each channel's subscriber list
+                ConcurrentHashMap<Integer, String> channelSubs = channelSubscribers.get(channel);
+                if (channelSubs != null) {
+                    channelSubs.remove(connectionId);
+                }
+            }
+        }
     }
 
-    // --- Helper functions (not part of the original interface) to manage registration ---
+    @Override
+    public void subscribe(String channel, int connectionId, String subscriptionId) {
+        // Register the user to the channel
+        channelSubscribers.computeIfAbsent(channel, k -> new ConcurrentHashMap<>())
+                          .put(connectionId, subscriptionId);
 
+        // Record the subscription for the user (for reverse lookup)
+        clientSubscriptions.computeIfAbsent(connectionId, k -> new ConcurrentHashMap<>())
+                           .put(subscriptionId, channel);
+    }
+
+    @Override
+    public void unsubscribe(String subscriptionId, int connectionId) {
+        // Find which channel this subscription ID belongs to
+        Map<String, String> userSubs = clientSubscriptions.get(connectionId);
+        
+        if (userSubs != null) {
+            String channel = userSubs.remove(subscriptionId);
+            
+            // If the channel was found, remove the user from that channel's list
+            if (channel != null) {
+                ConcurrentHashMap<Integer, String> channelSubs = channelSubscribers.get(channel);
+                if (channelSubs != null) {
+                    channelSubs.remove(connectionId);
+                }
+            }
+        }
+    }
+    
     /**
-     * Adds a new client connection to the map.
-     * Should be called when a client connects to the server (Accept phase).
-     * @param connectionId The unique ID of the connection
-     * @param handler The handler for this connection
+     * Adds a new connection handler. Called by the server when a client connects.
      */
     public void addConnection(int connectionId, ConnectionHandler<T> handler) {
         activeConnections.put(connectionId, handler);
-    }
-
-    /**
-     * Subscribes a client to a specific channel.
-     * Should be called by the protocol when a SUBSCRIBE frame is received.
-     * @param channel The name of the channel/topic
-     * @param connectionId The ID of the client
-     */
-    public void subscribe(String channel, int connectionId) {
-        // Create the channel if it doesn't exist, and add the user
-        channels.computeIfAbsent(channel, k -> new ConcurrentLinkedQueue<>()).add(connectionId);
-    }
-
-    /**
-     * Unsubscribes a client from a specific channel.
-     * Should be called by the protocol when an UNSUBSCRIBE frame is received.
-     * @param channel The name of the channel/topic
-     * @param connectionId The ID of the client
-     */
-    public void unsubscribe(String channel, int connectionId) {
-        ConcurrentLinkedQueue<Integer> subscribers = channels.get(channel);
-        if (subscribers != null) {
-            subscribers.remove(connectionId);
-        }
     }
 }
