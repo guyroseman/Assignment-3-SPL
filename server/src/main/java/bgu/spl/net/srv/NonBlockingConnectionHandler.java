@@ -1,7 +1,7 @@
 package bgu.spl.net.srv;
 
 import bgu.spl.net.api.MessageEncoderDecoder;
-import bgu.spl.net.api.MessagingProtocol;
+import bgu.spl.net.api.StompMessagingProtocol; // Correct Import
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -12,72 +12,64 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class NonBlockingConnectionHandler<T> implements ConnectionHandler<T> {
 
-    private static final int BUFFER_ALLOCATION_SIZE = 1 << 13; //8k
-    private static final ConcurrentLinkedQueue<ByteBuffer> BUFFER_POOL = new ConcurrentLinkedQueue<>();
+    private static final int BUFFER_ALLOCATION_SIZE = 8192;
 
-    private final MessagingProtocol<T> protocol;
+    private final StompMessagingProtocol<T> protocol; // Changed type
     private final MessageEncoderDecoder<T> encdec;
     private final Queue<ByteBuffer> writeQueue = new ConcurrentLinkedQueue<>();
     private final SocketChannel chan;
-    private final Reactor reactor;
+    private final Reactor<T> reactor;
 
     public NonBlockingConnectionHandler(
             MessageEncoderDecoder<T> reader,
-            MessagingProtocol<T> protocol,
+            StompMessagingProtocol<T> protocol,
             SocketChannel chan,
-            Reactor reactor) {
+            Reactor<T> reactor,
+            int connectionId,       // New Arg
+            Connections<T> connections) { // New Arg
+
         this.chan = chan;
         this.encdec = reader;
         this.protocol = protocol;
         this.reactor = reactor;
+        
+        // 1. Add this handler to the connections map
+        ((ConnectionsImpl<T>) connections).addConnection(connectionId, this);
+
+        // 2. Start the protocol
+        protocol.start(connectionId, connections);
     }
 
     public Runnable continueRead() {
-        ByteBuffer buf = leaseBuffer();
+        ByteBuffer buf = ByteBuffer.allocate(BUFFER_ALLOCATION_SIZE);
 
-        boolean success = false;
         try {
-            success = chan.read(buf) != -1;
-        } catch (IOException ex) {
-            ex.printStackTrace();
-        }
-
-        if (success) {
-            buf.flip();
-            return () -> {
-                try {
-                    while (buf.hasRemaining()) {
-                        T nextMessage = encdec.decodeNextByte(buf.get());
-                        if (nextMessage != null) {
-                            T response = protocol.process(nextMessage);
-                            if (response != null) {
-                                writeQueue.add(ByteBuffer.wrap(encdec.encode(response)));
-                                reactor.updateInterestedOps(chan, SelectionKey.OP_READ | SelectionKey.OP_WRITE);
+            if (chan.read(buf) == -1) {
+                close();
+            } else {
+                buf.flip();
+                return () -> {
+                    try {
+                        while (buf.hasRemaining()) {
+                            T nextMessage = encdec.decodeNextByte(buf.get());
+                            if (nextMessage != null) {
+                                // 3. Process the message (Void return)
+                                protocol.process(nextMessage);
+                                
+                                // Note: We do NOT write response here anymore.
+                                // The protocol calls connections.send -> which calls this.send()
                             }
                         }
+                    } finally {
+                        buf.clear();
                     }
-                } finally {
-                    releaseBuffer(buf);
-                }
-            };
-        } else {
-            releaseBuffer(buf);
-            close();
-            return null;
-        }
-
-    }
-
-    public void close() {
-        try {
-            chan.close();
+                };
+            }
         } catch (IOException ex) {
             ex.printStackTrace();
+            close();
         }
-    }
-
-    public boolean isClosed() {
-        return !chan.isOpen();
+        return null;
     }
 
     public void continueWrite() {
@@ -87,9 +79,8 @@ public class NonBlockingConnectionHandler<T> implements ConnectionHandler<T> {
                 chan.write(top);
                 if (top.hasRemaining()) {
                     return;
-                } else {
-                    writeQueue.remove();
                 }
+                writeQueue.remove();
             } catch (IOException ex) {
                 ex.printStackTrace();
                 close();
@@ -102,22 +93,25 @@ public class NonBlockingConnectionHandler<T> implements ConnectionHandler<T> {
         }
     }
 
-    private static ByteBuffer leaseBuffer() {
-        ByteBuffer buff = BUFFER_POOL.poll();
-        if (buff == null) {
-            return ByteBuffer.allocateDirect(BUFFER_ALLOCATION_SIZE);
+    @Override
+    public void close() {
+        try {
+            chan.close();
+        } catch (IOException ex) {
+            ex.printStackTrace();
         }
-
-        buff.clear();
-        return buff;
     }
 
-    private static void releaseBuffer(ByteBuffer buff) {
-        BUFFER_POOL.add(buff);
+    public boolean isClosed() {
+        return !chan.isOpen();
     }
 
     @Override
     public void send(T msg) {
-        //IMPLEMENT IF NEEDED
+        // Implementation of send for ConnectionsImpl
+        if (msg != null) {
+            writeQueue.add(ByteBuffer.wrap(encdec.encode(msg)));
+            reactor.updateInterestedOps(chan, SelectionKey.OP_READ | SelectionKey.OP_WRITE);
+        }
     }
 }

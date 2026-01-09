@@ -21,6 +21,10 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
         this.connections = connections;
     }
 
+    public StompMessagingProtocolImpl(Connections<String> connections) {
+        this.connections = connections;
+    }
+
     @Override
     public void process(String message) {
         String[] lines = message.split("\n");
@@ -139,13 +143,12 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
             sendError(headers, "Unauthorized", "You must log in first");
             return;
         }
-
+        
         // If the user tries to send to a channel they are not subscribed to -> Error
         if (!connections.isSubscribed(destination, connectionId)) {
             sendError(headers, "Unauthorized", "User is not subscribed to topic " + destination);
             return;
         }
-        
         // Construct the MESSAGE frame for broadcasting
         String messageFrame = "MESSAGE\n" +
                               "subscription:0\n" + 
@@ -207,7 +210,7 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
             if (line.isEmpty()) break;
             String[] parts = line.split(":", 2);
             if (parts.length == 2) {
-                headers.put(parts[0], parts[1]);
+                headers.put(parts[0].trim(), parts[1].trim());
             }
         }
         return headers;
