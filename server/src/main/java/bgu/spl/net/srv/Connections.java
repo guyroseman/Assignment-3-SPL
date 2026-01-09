@@ -25,4 +25,12 @@ public interface Connections<T> {
      * @param connectionId The ID of the client.
      */
     void unsubscribe(String subscriptionId, int connectionId);
+
+    /**
+     * Checks if a specific client is subscribed to a specific channel.
+     * @param channel The name of the channel.
+     * @param connectionId The ID of the client.
+     * @return true if subscribed, false otherwise.
+     */
+    boolean isSubscribed(String channel, int connectionId);
 }

@@ -140,9 +140,15 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
             return;
         }
 
+        // If the user tries to send to a channel they are not subscribed to -> Error
+        if (!connections.isSubscribed(destination, connectionId)) {
+            sendError(headers, "Unauthorized", "User is not subscribed to topic " + destination);
+            return;
+        }
+        
         // Construct the MESSAGE frame for broadcasting
         String messageFrame = "MESSAGE\n" +
-                              "subscription:0\n" + // Placeholder: In a strict implementation, this would be dynamic
+                              "subscription:0\n" + 
                               "message-id:" + System.currentTimeMillis() + "\n" +
                               "destination:" + destination + "\n" +
                               "\n" +

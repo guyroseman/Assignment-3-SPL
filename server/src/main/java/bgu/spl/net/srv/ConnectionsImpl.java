@@ -5,15 +5,15 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class ConnectionsImpl<T> implements Connections<T> {
 
-    // 1. Mapping: ConnectionID -> ConnectionHandler
+    // Mapping: ConnectionID -> ConnectionHandler
     // Holds the physical connection handlers for sending data over the network.
     private final ConcurrentHashMap<Integer, ConnectionHandler<T>> activeConnections = new ConcurrentHashMap<>();
 
-    // 2. Mapping: ChannelName -> ( ConnectionID -> SubscriptionID )
+    // Mapping: ChannelName -> ( ConnectionID -> SubscriptionID )
     // Manages topic subscriptions. Used when sending a message to a channel to know who should receive it.
     private final ConcurrentHashMap<String, ConcurrentHashMap<Integer, String>> channelSubscribers = new ConcurrentHashMap<>();
 
-    // 3. Mapping: ConnectionID -> ( SubscriptionID -> ChannelName )
+    // Mapping: ConnectionID -> ( SubscriptionID -> ChannelName )
     // Reverse mapping for fast lookup. Used to efficiently unsubscribe a user by ID or clean up on disconnect.
     private final ConcurrentHashMap<Integer, ConcurrentHashMap<String, String>> clientSubscriptions = new ConcurrentHashMap<>();
 
@@ -36,7 +36,9 @@ public class ConnectionsImpl<T> implements Connections<T> {
             for (Integer connectionId : subscribers.keySet()) {
                 // In a future improvement, we could use the subscription-id (value) 
                 // to customize the message header for each client.
-                send(connectionId, msg);
+                String originalFrame = (String) msg;
+                String personalizedFrame = originalFrame.replaceFirst("subscription:0", "subscription:" + subscribers.get(connectionId));
+                send(connectionId, (T) personalizedFrame);
             }
         }
     }
@@ -93,5 +95,14 @@ public class ConnectionsImpl<T> implements Connections<T> {
      */
     public void addConnection(int connectionId, ConnectionHandler<T> handler) {
         activeConnections.put(connectionId, handler);
+    }
+
+    @Override
+    public boolean isSubscribed(String channel, int connectionId) {
+        // Get the map of subscribers for this specific channel
+        ConcurrentHashMap<Integer, String> subscribers = channelSubscribers.get(channel);
+        
+        // Check if the map exists AND if the user is in it
+        return subscribers != null && subscribers.containsKey(connectionId);
     }
 }
