@@ -63,6 +63,60 @@ const std::string &Event::get_discription() const
 
 Event::Event(const std::string &frame_body) : team_a_name(""), team_b_name(""), name(""), time(0), game_updates(), team_a_updates(), team_b_updates(), description("")
 {
+    std::stringstream ss(frame_body);
+    std::string line;
+    std::string state = ""; // To track which section we are parsing (updates/description)
+
+    while (std::getline(ss, line))
+    {
+        // 1. Identify the field key
+        if (line.find("team a:") == 0) {
+            team_a_name = line.substr(7);
+        }
+        else if (line.find("team b:") == 0) {
+            team_b_name = line.substr(7);
+        }
+        else if (line.find("event name:") == 0) {
+            name = line.substr(11);
+        }
+        else if (line.find("time:") == 0) {
+            try {
+                time = std::stoi(line.substr(5));
+            } catch (...) { time = 0; }
+        }
+        // 2. Handle Map Headers (Change State)
+        else if (line == "general game updates:") {
+            state = "game_updates";
+        }
+        else if (line == "team a updates:") {
+            state = "team_a_updates";
+        }
+        else if (line == "team b updates:") {
+            state = "team_b_updates";
+        }
+        else if (line == "description:") {
+            state = "description";
+        }
+        // 3. Handle Content based on State
+        else {
+            if (state == "description") {
+                // Description can be multi-line, so we append
+                description += line + "\n";
+            }
+            else {
+                // It's a map update (key:value)
+                size_t colonPos = line.find(':');
+                if (colonPos != std::string::npos) {
+                    std::string key = line.substr(0, colonPos);
+                    std::string value = line.substr(colonPos + 1);
+                    
+                    if (state == "game_updates") game_updates[key] = value;
+                    else if (state == "team_a_updates") team_a_updates[key] = value;
+                    else if (state == "team_b_updates") team_b_updates[key] = value;
+                }
+            }
+        }
+    }
 }
 
 names_and_events parseEventsFile(std::string json_path)
