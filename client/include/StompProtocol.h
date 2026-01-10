@@ -10,8 +10,8 @@
 class StompProtocol {
 private:
     // --- State Variables ---
-    bool isConnected;            // Logical connection status (after CONNECT frame)
-    bool isLogoutRequested;      // Flag: Did we send DISCONNECT? (Wait for RECEIPT before closing)
+    std::atomic<bool> isConnected;            // Logical connection status (after CONNECT frame)
+    std::atomic<bool> isLogoutRequested;      // Flag: Did we send DISCONNECT? (Wait for RECEIPT before closing)
     
     std::string currentUser;     // The currently logged-in username
     int subscriptionIdCounter;   // Auto-incrementing ID for SUBSCRIBE frames

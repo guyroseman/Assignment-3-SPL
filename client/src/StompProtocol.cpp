@@ -212,34 +212,31 @@ void StompProtocol::login(const std::string& hostPort, const std::string& userna
 void StompProtocol::joinGame(const std::string& gameName, ConnectionHandler& handler) {
     // Lock for thread safety
     std::lock_guard<std::mutex> lock(protocolMutex);
-    // Check if already subscribed
+
     if (activeSubscriptions.count(gameName)) {
         std::cout << "Already subscribed to " << gameName << std::endl;
         return;
     }
 
-    //  Generate IDs
     int subId = subscriptionIdCounter++;
     int receiptId = receiptIdCounter++;
 
-    // We map the Game Name to the Sub ID so we can unsubscribe later
     activeSubscriptions[gameName] = subId;
-    // We map the Sub ID to the Game Name so we can identify incoming messages
     subscriptionIdToGameName[subId] = gameName;
-    
-    // Save the receipt action to print later
     receiptActions[receiptId] = "Joined channel " + gameName;
 
-    // Build Frame
+    // Build the frame manually and precisely
     std::string frame = "SUBSCRIBE\n"
-                        "destination:" + gameName + "\n"
+                        "destination:/" + gameName + "\n"  // Note: Added slash (common in some servers)
                         "id:" + std::to_string(subId) + "\n"
                         "receipt:" + std::to_string(receiptId) + "\n"
-                        "\n"
-                        "\0"; // Null byte
+                        "\n"; // Empty line indicating end of headers
 
-    // Send
-    handler.sendLine(frame); // Assuming sendLine appends \n, but we might need sendBytes for \0
+    // Debug print - to see exactly what we are sending
+    std::cout << "DEBUG: Sending Frame:\n" << frame << "^@" << std::endl;
+
+    // Safe send: sending text + Null byte immediately after
+    handler.sendBytes(frame.c_str(), frame.length());
     handler.sendBytes("\u0000", 1);
 }
 
@@ -453,33 +450,58 @@ void StompProtocol::handleConnected(const std::map<std::string, std::string>& he
 
 // Handle MESSAGE frame from server 
 void StompProtocol::handleMessage(const std::map<std::string, std::string>& headers, const std::string& body) {
+    // Safety check: Ensure the subscription header exists
     if (headers.count("subscription") == 0) return;
 
-    // Extract subscription ID
-    int subId = std::stoi(headers.at("subscription"));
+    // Extract the Subscription ID
+    int subId;
+    try {
+        subId = std::stoi(headers.at("subscription"));
+    } catch (...) { return; }
+
     std::string gameName;
+    std::string sender;
+
     {
+        // Lock mutex for thread safety (accessing maps)
         std::lock_guard<std::mutex> lock(protocolMutex);
 
-        // Verify subscription exists before accessing the map
+        // Verify we are subscribed to this game using the ID
         auto it = subscriptionIdToGameName.find(subId);
         if (it == subscriptionIdToGameName.end()) {
-            return; // Ignore message if we are not subscribed
+            return; // We ignore messages for unknown subscriptions
         }
-        // Find game name from subscription ID
         gameName = subscriptionIdToGameName[subId];
-        // Extract sender from body 
-        size_t delimiterPos = body.find(':');
-        if (delimiterPos == std::string::npos) {
-            return; // Malformed body
+
+        // Extract the sender's username from the message body
+        std::stringstream ss(body);
+        std::string line;
+        while (std::getline(ss, line)) {
+            // Look for the line starting with "user:"
+            if (line.find("user:") == 0) {
+                sender = line.substr(5); // Skip the "user:" prefix to get the name
+                
+                // Clean up potential trailing whitespace/newlines
+                while (!sender.empty() && (sender.back() == '\r' || sender.back() == '\n' || sender.back() == ' ')) {
+                    sender.pop_back();
+                }
+                break;
+            }
         }
-        std::string sender = body.substr(0, delimiterPos);
-        std::string event = body.substr(delimiterPos + 1);
-        // Store event
-        gameUpdates[gameName][sender].push_back(Event{event});
+
+        // If we couldn't find a user field, the message body is malformed
+        if (sender.empty()) {
+            std::cout << "Error: No user field found in message body" << std::endl;
+            return;
+        }
+
+        // Store the event in memory
+        // We pass the full body to the Event constructor so it can parse all fields (stats, description, etc.)
+        gameUpdates[gameName][sender].push_back(Event(body));
     }
-    // Print to consoles
-    std::cout << "Received update in " << gameName << " from " << body << std::endl;
+
+    // Print to console as required
+    std::cout << "Received update in " << gameName << " from " << sender << std::endl;
 }
 
 // Handle RECEIPT frame from server
