@@ -30,7 +30,6 @@ public class Database {
 	 * @return Result string from SQL server
 	 */
 	private String executeSQL(String sql) {
-		/* 
 		try (Socket socket = new Socket(sqlHost, sqlPort);
 			 PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
 			 BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
@@ -52,10 +51,10 @@ public class Database {
 			System.err.println("SQL Error: " + e.getMessage());
 			return "ERROR:" + e.getMessage();
 		}
-		*/
+		/* 
 		// Mocked SQL execution for demonstration purposes
-		System.out.println("[SQL MOCK] Would execute: " + sql);
-		return "SUCCESS|()"; // Mocked success response
+		System.out.println("SQL MOCK Would execute: " + sql);
+		return "SUCCESS|()"; // Mocked success response */
 	}
 
 	/**

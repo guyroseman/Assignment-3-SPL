@@ -88,8 +88,7 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
             // Send success frame
             String response = "CONNECTED\n" +
                               "version:1.2\n" +
-                              "\n" +
-                              "\u0000";
+                              "\n";
             connections.send(connectionId, response);
         } else {
             // Handle various login failures
@@ -149,14 +148,20 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
             sendError(headers, "Unauthorized", "User is not subscribed to topic " + destination);
             return;
         }
+
+    // Check if this SEND frame comes from a 'report' command (contains the file header)
+    String filename = headers.get("file");
+    if (filename != null) {
+        Database.getInstance().trackFileUpload(this.currentUser, filename, destination);
+    }
+
         // Construct the MESSAGE frame for broadcasting
         String messageFrame = "MESSAGE\n" +
                               "subscription:0\n" + 
                               "message-id:" + System.currentTimeMillis() + "\n" +
                               "destination:" + destination + "\n" +
                               "\n" +
-                              body + "\n" + 
-                              "\u0000";
+                              body + "\n";
 
         // Broadcast to all subscribers of the channel
         connections.send(destination, messageFrame);
@@ -182,8 +187,7 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
         if (receiptId != null) {
             String receiptFrame = "RECEIPT\n" +
                                   "receipt-id:" + receiptId + "\n" +
-                                  "\n" +
-                                  "\u0000";
+                                  "\n" ;
             connections.send(connectionId, receiptFrame);
         }
     }
@@ -193,8 +197,7 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
                             "message:" + message + "\n" +
                             (headers.containsKey("receipt") ? "receipt-id:" + headers.get("receipt") + "\n" : "") +
                             "\n" +
-                            description + "\n" +
-                            "\u0000";
+                            description + "\n";
         connections.send(connectionId, errorFrame);
         
         // Protocol requires closing connection after an ERROR frame

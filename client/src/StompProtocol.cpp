@@ -342,6 +342,7 @@ void StompProtocol::sendReport(const std::string& file, ConnectionHandler& handl
         // Construct the STOMP Frame
         std::string frame = "SEND\n"
                             "destination:/" + gameName + "\n"
+                            "file:" + file + "\n" // as detailed in the forum
                             "\n" + 
                             body + "\n"
                             "\0"; 
