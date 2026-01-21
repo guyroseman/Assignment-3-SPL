@@ -136,13 +136,13 @@ public class StompMessagingProtocolImpl implements StompMessagingProtocol<String
             sendError(headers, "Malformed Frame", "Missing destination header");
             return;
         }
-        
+
         // Ensure the user is logged in before allowing them to send messages
         if (this.currentUser == null) {
             sendError(headers, "Unauthorized", "You must log in first");
             return;
         }
-        
+
         // If the user tries to send to a channel they are not subscribed to -> Error
         if (!connections.isSubscribed(destination, connectionId)) {
             sendError(headers, "Unauthorized", "User is not subscribed to topic " + destination);
