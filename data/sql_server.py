@@ -50,7 +50,7 @@ def init_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL,
             login_time TEXT NOT NULL,
-            logout_time TEXT
+            logout_time TEXT,
             FOREIGN KEY(username) REFERENCES users(username) ON DELETE CASCADE
         )
     ''')
@@ -62,7 +62,7 @@ def init_database():
             username TEXT NOT NULL,
             filename TEXT NOT NULL,
             upload_time TEXT NOT NULL,
-            game_channel TEXT NOT NULL
+            game_channel TEXT NOT NULL,
             FOREIGN KEY(username) REFERENCES users(username) ON DELETE CASCADE
         )
     ''')

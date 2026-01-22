@@ -34,8 +34,6 @@ public class ConnectionsImpl<T> implements Connections<T> {
         
         if (subscribers != null) {
             for (Integer connectionId : subscribers.keySet()) {
-                // In a future improvement, we could use the subscription-id (value) 
-                // to customize the message header for each client.
                 String originalFrame = (String) msg;
                 String personalizedFrame = originalFrame.replaceFirst("subscription:0", "subscription:" + subscribers.get(connectionId));
                 send(connectionId, (T) personalizedFrame);

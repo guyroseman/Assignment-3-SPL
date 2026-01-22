@@ -67,7 +67,7 @@ int main(int argc, char *argv[]) {
         const short bufsize = 1024;
         char buf[bufsize];
 
-        // 1. Login Phase (Performed by Main Thread)
+        // Login Phase (Performed by Main Thread)
         // We must parse 'host' and 'port' BEFORE creating threads or handlers.
         std::cin.getline(buf, bufsize);
         std::string line(buf);
@@ -97,7 +97,7 @@ int main(int argc, char *argv[]) {
                 continue;
             }
 
-            // 2. Setup Infrastructure
+            // Setup Infrastructure
             ConnectionHandler* handler = new ConnectionHandler(host, port);
             if (!handler->connect()) {
                 std::cerr << "Cannot connect to " << host << ":" << port << std::endl;
@@ -105,19 +105,19 @@ int main(int argc, char *argv[]) {
                 continue;
             }
 
-            // 3. Setup Logic
+            // Setup Logic
             StompProtocol protocol;
 
-            // 4. Perform Handshake
+            // Perform Handshake
             // Send the initial CONNECT frame immediately
             protocol.processKeyboardCommand(line, *handler);
 
-            // 5. Spawn Worker Threads
+            // Spawn Worker Threads
             // The Main Thread launches two employees and then waits.
             std::thread socketThread(runSocketListener, handler, &protocol);
             std::thread keyboardThread(runKeyboardListener, handler, &protocol);
 
-            // 6. Wait for Completion
+            // Wait for Completion
             // The socket thread will finish when the server sends the RECEIPT for logout
             // or if the connection drops.
             if (socketThread.joinable()) {
@@ -131,7 +131,7 @@ int main(int argc, char *argv[]) {
                 keyboardThread.join();
             }
 
-            // 7. Cleanup
+            // Cleanup
             delete handler;
             std::cout << "Client disconnected cleanly. Ready for new login." << std::endl;
 
